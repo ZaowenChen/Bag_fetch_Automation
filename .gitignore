@@ -1,0 +1,62 @@
+# Python bytecode and interpreter caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Compiled extensions
+*.so
+
+# Distribution / packaging artifacts
+build/
+dist/
+wheels/
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+
+# Installer and dependency logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test, coverage, and profiling data
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+nosetests.xml
+*.cover
+*.py,cover
+.cache
+.hypothesis/
+
+# Type checker caches
+.mypy_cache/
+.pyre/
+.pytype/
+.dmypy.json
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.*/
+.env
+.env.*
+
+# IDE/editor state
+.idea/
+.vscode/
+*.code-workspace
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Local logs and temp data
+*.log
+*.tmp
