@@ -4,10 +4,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+if __package__ in (None, ""):
+    # Ensure the project root is importable when invoked as a loose script.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from PySide6.QtWidgets import QApplication
 
-from .core import logging_cfg
-from .ui.main_window import MainWindow
+from bagfetcher.core import logging_cfg
+from bagfetcher.ui.main_window import MainWindow
 
 
 def main() -> int:

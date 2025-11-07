@@ -28,6 +28,7 @@ from bagfetcher.core.models import BagFile
 class DownloadPanel(QWidget):
     destination_changed = Signal(Path)
     download_requested = Signal(dict)
+    cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -61,6 +62,10 @@ class DownloadPanel(QWidget):
         self.download_btn = QPushButton("Stage & Download")
         self.download_btn.clicked.connect(self._emit_download)
         btns.addWidget(self.download_btn)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self._emit_cancel)
+        btns.addWidget(self.cancel_btn)
         btns.addStretch()
         root.addLayout(btns)
 
@@ -128,6 +133,7 @@ class DownloadPanel(QWidget):
 
     def set_busy(self, busy: bool) -> None:
         self.download_btn.setEnabled(not busy)
+        self.cancel_btn.setEnabled(busy)
 
     def update_progress(self, name: str, transferred: int, total: int) -> None:
         bar = self._progress_widgets.get(name)
@@ -145,3 +151,11 @@ class DownloadPanel(QWidget):
         for item in self._status_items.values():
             if item.text() != "Completed":
                 item.setText("Completed")
+
+    def mark_all_cancelled(self) -> None:
+        for item in self._status_items.values():
+            if item.text() != "Completed":
+                item.setText("Cancelled")
+
+    def _emit_cancel(self) -> None:
+        self.cancel_requested.emit()

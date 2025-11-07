@@ -5,7 +5,6 @@ from dataclasses import asdict
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -18,8 +17,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from bagfetcher.core import keychain
 from bagfetcher.core.models import Profile
 from bagfetcher.core.parser import ParseError, PasteResult, parse_paste
 
@@ -54,7 +51,6 @@ class ConnectPanel(QWidget):
         self.password_edit.setEchoMode(QLineEdit.Password)
         self.bag_dir_edit = QLineEdit("/root/GAUSSIAN_RUNTIME_DIR/bag")
         self.stage_dir_edit = QLineEdit("/root/public/tmp")
-        self.save_password_chk = QCheckBox("Save password to Keychain")
 
         form_layout.addRow("User", self.user_edit)
         form_layout.addRow("Host", self.host_edit)
@@ -62,7 +58,6 @@ class ConnectPanel(QWidget):
         form_layout.addRow("Password", self.password_edit)
         form_layout.addRow("Bag Dir", self.bag_dir_edit)
         form_layout.addRow("Stage Dir", self.stage_dir_edit)
-        form_layout.addRow(self.save_password_chk)
 
         root.addWidget(form_box)
 
@@ -87,9 +82,6 @@ class ConnectPanel(QWidget):
         self.password_edit.setText(result.password)
         self.parsed.emit(asdict(result))
 
-        if result.password:
-            self.save_password_chk.setChecked(True)
-
     def _show_error(self, message: str) -> None:
         QMessageBox.warning(self, "BagFetcher", message)
 
@@ -101,13 +93,10 @@ class ConnectPanel(QWidget):
             "password": self.password_edit.text(),
             "bag_dir": self.bag_dir_edit.text().strip(),
             "stage_dir": self.stage_dir_edit.text().strip(),
-            "save_password": self.save_password_chk.isChecked(),
         }
         if not payload["host"]:
             self._show_error("Host is required before connecting.")
             return
-        if payload["save_password"] and payload["password"]:
-            keychain.save_password(payload["user"], payload["host"], payload["port"], payload["password"])
         self.connect_requested.emit(payload)
 
     def load_profile(self, profile: Profile) -> None:
@@ -116,11 +105,6 @@ class ConnectPanel(QWidget):
         self.port_edit.setText(str(profile.port))
         self.bag_dir_edit.setText(profile.bag_dir)
         self.stage_dir_edit.setText(profile.stage_dir)
-        self.save_password_chk.setChecked(profile.save_password)
-        if profile.save_password:
-            password = keychain.load_password(profile.user, profile.host, profile.port)
-            if password:
-                self.password_edit.setText(password)
 
     def to_profile(self, name: str) -> Profile:
         return Profile(
@@ -130,5 +114,4 @@ class ConnectPanel(QWidget):
             port=int(self.port_edit.text() or "22"),
             bag_dir=self.bag_dir_edit.text().strip(),
             stage_dir=self.stage_dir_edit.text().strip(),
-            save_password=self.save_password_chk.isChecked(),
         )

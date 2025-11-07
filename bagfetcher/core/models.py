@@ -17,7 +17,6 @@ class Profile:
     user: str
     bag_dir: str = "/root/GAUSSIAN_RUNTIME_DIR/bag"
     stage_dir: str = "/root/public/tmp"
-    save_password: bool = False
     tags: tuple[str, ...] = field(default_factory=tuple)
 
 

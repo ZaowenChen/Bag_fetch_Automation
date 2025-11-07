@@ -7,6 +7,7 @@ from typing import Iterable
 from PySide6.QtCore import QObject, Signal, Slot
 
 from bagfetcher.core.bag_service import BagService
+from bagfetcher.core.exceptions import DownloadCancelled
 from bagfetcher.core.models import BagFile
 from bagfetcher.core.sshclient import SSHClientWrapper
 
@@ -41,6 +42,7 @@ class DownloadWorker(QObject):
     progress = Signal(str, int, int)
     status = Signal(str, str)
     finished = Signal()
+    cancelled = Signal()
     error = Signal(str)
 
     def __init__(
@@ -55,6 +57,7 @@ class DownloadWorker(QObject):
         self.items = list(items)
         self.local_dir = local_dir
         self.cleanup = cleanup
+        self._cancelled = False
 
     @Slot()
     def run(self) -> None:
@@ -64,11 +67,21 @@ class DownloadWorker(QObject):
                 self.local_dir,
                 self.cleanup,
                 progress_cb=self._emit_progress,
+                cancel_cb=self.is_cancelled,
             )
+        except DownloadCancelled:
+            self.cancelled.emit()
+            return
         except Exception as exc:  # pragma: no cover - network side effects
             self.error.emit(str(exc))
             return
         self.finished.emit()
+
+    def request_cancel(self) -> None:
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled
 
     def _emit_progress(self, name: str, transferred: int, total: int) -> None:
         self.progress.emit(name, transferred, total)

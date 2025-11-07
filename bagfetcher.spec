@@ -50,6 +50,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='BagFetcher.app',
-    icon='bagfetcher/packaging/icons.icns',
+    icon='bagfetcher/packaging/cobotiq_logo.icns',
     info_plist='bagfetcher/packaging/Info.plist',
 )

@@ -9,6 +9,7 @@ from typing import Iterable
 
 import paramiko
 
+from .exceptions import DownloadCancelled
 from .models import BagFile
 from .parser import bag_name_to_datetime
 
@@ -150,17 +151,21 @@ class SSHClientWrapper:
         exit_status = stdout.channel.recv_exit_status()
         return exit_status, output
 
-    def stage_files(self, remote_paths: Iterable[str], stage_dir: str) -> None:
+    def stage_files(self, remote_paths: Iterable[str], stage_dir: str, cancel_cb=None) -> None:
         for path in remote_paths:
+            if cancel_cb and cancel_cb():
+                raise DownloadCancelled()
             fname = Path(path).name
             self.run_sudo(f"cp {path} {stage_dir.rstrip('/')}/{fname} && chmod a+r {stage_dir.rstrip('/')}/{fname}")
 
-    def download_file(self, stage_dir: str, name: str, local_path: Path, progress_cb=None) -> None:
+    def download_file(self, stage_dir: str, name: str, local_path: Path, progress_cb=None, cancel_cb=None) -> None:
         remote_path = f"{stage_dir.rstrip('/')}/{name}"
         local_path.parent.mkdir(parents=True, exist_ok=True)
         with self.sftp.file(remote_path, mode="rb") as remote, local_path.open("wb") as local:
             transferred = 0
             while True:
+                if cancel_cb and cancel_cb():
+                    raise DownloadCancelled()
                 data = remote.read(32768)
                 if not data:
                     break

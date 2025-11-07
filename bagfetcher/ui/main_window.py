@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
 
         self.connect_panel.connect_requested.connect(self.handle_connect)
         self.download_panel.download_requested.connect(self.handle_download)
+        self.download_panel.cancel_requested.connect(self.handle_cancel_download)
         self.bag_browser.selection_changed.connect(self._selection_changed)
 
         self._ssh = None
@@ -109,6 +110,7 @@ class MainWindow(QMainWindow):
         worker.progress.connect(self.download_panel.update_progress)
         worker.status.connect(self.download_panel.update_status)
         worker.finished.connect(self._on_download_finished)
+        worker.cancelled.connect(self._on_download_cancelled)
         worker.error.connect(self._on_download_error)
         thread.start()
         self._download_thread = thread
@@ -116,6 +118,12 @@ class MainWindow(QMainWindow):
 
     def _selection_changed(self, bags: list[BagFile]) -> None:
         self.status_bar.showMessage(f"{len(bags)} files selected")
+
+    def handle_cancel_download(self) -> None:
+        if not self._download_worker:
+            return
+        self.status_bar.showMessage("Cancelling download…")
+        self._download_worker.request_cancel()
 
     # Worker callbacks -------------------------------------------------
     def _on_connected(self, ssh, service, bags: list[BagFile]) -> None:
@@ -162,6 +170,20 @@ class MainWindow(QMainWindow):
         self.download_panel.set_busy(False)
         self.download_panel.mark_all_complete()
         self.status_bar.showMessage("Download complete", 5000)
+
+    def _on_download_cancelled(self) -> None:
+        thread = self._download_thread
+        worker = self._download_worker
+        if thread:
+            thread.quit()
+            thread.wait()
+        if worker:
+            worker.deleteLater()
+        self._download_thread = None
+        self._download_worker = None
+        self.download_panel.set_busy(False)
+        self.download_panel.mark_all_cancelled()
+        self.status_bar.showMessage("Download cancelled", 5000)
 
     def _on_download_error(self, message: str) -> None:
         thread = self._download_thread

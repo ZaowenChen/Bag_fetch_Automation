@@ -13,6 +13,10 @@ wheels/
 pip-wheel-metadata/
 *.egg-info/
 .eggs/
+release/
+*.dmg
+*.pkg
+BagFetcher*.zip
 
 # Installer and dependency logs
 pip-log.txt

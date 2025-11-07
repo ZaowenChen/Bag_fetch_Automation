@@ -6,6 +6,8 @@
     <string>BagFetcher</string>
     <key>CFBundleIdentifier</key>
     <string>com.yourorg.bagfetcher</string>
+    <key>CFBundleIconFile</key>
+    <string>cobotiq_logo</string>
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
     <key>CFBundleShortVersionString</key>
