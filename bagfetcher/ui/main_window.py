@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import logging
-
+import os
+import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Qt, Slot
 from PySide6.QtWidgets import (
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QSplitter,
@@ -17,10 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from bagfetcher.core.models import BagFile
+from bagfetcher.core.robot_info import RobotInfo
 from bagfetcher.ui.bag_browser import BagBrowser
 from bagfetcher.ui.connect_panel import ConnectPanel
 from bagfetcher.ui.download_panel import DownloadPanel
 from bagfetcher.ui.workers import ConnectWorker, DownloadWorker
+from bagfetcher.ui.widgets import ClickableLabel
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +36,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("BagFetcher")
         self.resize(1200, 800)
+        self._user_config_path: str | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -43,8 +50,10 @@ class MainWindow(QMainWindow):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        self.robot_info_panel = self._build_robot_info_panel()
         self.bag_browser = BagBrowser()
         self.download_panel = DownloadPanel()
+        right_layout.addWidget(self.robot_info_panel)
         right_layout.addWidget(self.bag_browser, 4)
         right_layout.addWidget(self.download_panel, 1)
         splitter.addWidget(right)
@@ -66,11 +75,46 @@ class MainWindow(QMainWindow):
         self._download_thread: QThread | None = None
         self._download_worker: DownloadWorker | None = None
 
+    def _build_robot_info_panel(self) -> QGroupBox:
+        box = QGroupBox("Robot Info")
+        grid = QGridLayout(box)
+        titles = [
+            ("SN / Product ID:", "robot_info_sn_label"),
+            ("Model type:", "robot_info_model_label"),
+            ("Model number:", "robot_info_model_number_label"),
+            ("Software (上位机版本):", "robot_info_sw_label"),
+            ("User config:", "user_config_path_label"),
+        ]
+
+        for row, (label_text, attr_name) in enumerate(titles):
+            grid.addWidget(QLabel(label_text), row, 0)
+            if attr_name == "user_config_path_label":
+                label = ClickableLabel("–")
+                label.clicked.connect(self._handle_user_config_clicked)
+            else:
+                label = QLabel("–")
+                label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            setattr(self, attr_name, label)
+            grid.addWidget(label, row, 1)
+
+        grid.setColumnStretch(1, 1)
+        self._reset_robot_info_panel()
+        return box
+
+    def _reset_robot_info_panel(self) -> None:
+        self.robot_info_sn_label.setText("–")
+        self.robot_info_model_label.setText("–")
+        self.robot_info_model_number_label.setText("–")
+        self.robot_info_sw_label.setText("–")
+        self.user_config_path_label.setText("–")
+        self._user_config_path = None
+
     # region slots -----------------------------------------------------
     def handle_connect(self, payload: dict) -> None:
         if self._connect_thread:
             QMessageBox.information(self, "BagFetcher", "Already connecting. Please wait.")
             return
+        self._reset_robot_info_panel()
         self.status_bar.showMessage("Connecting…")
         self.connect_panel.setEnabled(False)
         worker = ConnectWorker(payload)
@@ -79,6 +123,8 @@ class MainWindow(QMainWindow):
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_connected)
         worker.error.connect(self._on_connect_error)
+        worker.robot_info_ready.connect(self._on_robot_info_loaded)
+        worker.user_config_failed.connect(self._on_user_config_failed)
         thread.start()
         self._connect_thread = thread
         self._connect_worker = worker
@@ -198,6 +244,42 @@ class MainWindow(QMainWindow):
         self.download_panel.set_busy(False)
         QMessageBox.critical(self, "BagFetcher", f"Download failed: {message}")
         log.exception("Download failed: %s", message)
+
+    # Robot info slots -------------------------------------------------
+    @Slot(object, object)
+    def _on_robot_info_loaded(self, robot_info: RobotInfo | None, user_config_path: str | None) -> None:
+        info = robot_info or RobotInfo()
+        self.robot_info_sn_label.setText(info.product_id or info.sn or "Unknown")
+        self.robot_info_model_label.setText(info.model_type or "Unknown")
+        self.robot_info_model_number_label.setText(info.model_number or "Unknown")
+        self.robot_info_sw_label.setText(info.upper_pc_version or "Unknown")
+        if user_config_path:
+            self.user_config_path_label.setText(user_config_path)
+            self._user_config_path = user_config_path
+        else:
+            self.user_config_path_label.setText("Unavailable")
+            self._user_config_path = None
+
+    @Slot(str)
+    def _on_user_config_failed(self, message: str) -> None:
+        QMessageBox.warning(self, "BagFetcher", message)
+
+    def _handle_user_config_clicked(self) -> None:
+        if not self._user_config_path:
+            QMessageBox.information(self, "BagFetcher", "User config file not downloaded yet.")
+            return
+        self._open_in_finder(self._user_config_path)
+
+    def _open_in_finder(self, path: str) -> None:
+        if not path:
+            return
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "BagFetcher", "User config file is missing locally.")
+            return
+        try:
+            subprocess.Popen(["open", "-R", path])
+        except Exception as exc:  # pragma: no cover - macOS specific
+            QMessageBox.warning(self, "BagFetcher", f"Unable to reveal file in Finder: {exc}")
 
     def closeEvent(self, event):  # type: ignore[override]
         try:

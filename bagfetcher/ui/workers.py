@@ -1,6 +1,7 @@
 """Background worker objects for network operations."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -9,12 +10,20 @@ from PySide6.QtCore import QObject, Signal, Slot
 from bagfetcher.core.bag_service import BagService
 from bagfetcher.core.exceptions import DownloadCancelled
 from bagfetcher.core.models import BagFile
+from bagfetcher.core.robot_info import (
+    RobotInfo,
+    download_user_config,
+    fetch_robot_info,
+    resolve_local_config_dir,
+)
 from bagfetcher.core.sshclient import SSHClientWrapper
 
 
 class ConnectWorker(QObject):
     finished = Signal(object, object, list)  # ssh, service, bags
     error = Signal(str)
+    robot_info_ready = Signal(object, object)  # RobotInfo, user_config_path (or None)
+    user_config_failed = Signal(str)
 
     def __init__(self, payload: dict):
         super().__init__()
@@ -32,10 +41,32 @@ class ConnectWorker(QObject):
             ssh.connect()
             service = BagService(ssh, self.payload["bag_dir"], self.payload["stage_dir"])
             bags = service.fetch_index()
+            self._fetch_robot_info(ssh)
         except Exception as exc:  # pragma: no cover - network side effects
             self.error.emit(str(exc))
             return
         self.finished.emit(ssh, service, bags)
+
+    # ------------------------------------------------------------------
+    def _fetch_robot_info(self, ssh: SSHClientWrapper) -> None:
+        """Fetch robot metadata and download user_config.yaml."""
+        robot_info: RobotInfo
+        try:
+            robot_info = fetch_robot_info(ssh.sftp)
+        except Exception:
+            robot_info = RobotInfo()
+
+        local_path: str | None = None
+        try:
+            local_dir = resolve_local_config_dir(robot_info, self.payload["host"])
+            os.makedirs(local_dir, exist_ok=True)
+            local_path = os.path.join(local_dir, "user_config.yaml")
+            download_user_config(ssh.sftp, local_path, ssh_wrapper=ssh)
+        except Exception as exc:
+            local_path = None
+            self.user_config_failed.emit(f"Failed to download user_config.yaml: {exc}")
+
+        self.robot_info_ready.emit(robot_info, local_path)
 
 
 class DownloadWorker(QObject):
