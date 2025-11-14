@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 from PySide6.QtCore import QDate, QTime, Qt, Signal
 from PySide6.QtWidgets import (
     QCalendarWidget,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTimeEdit,
@@ -32,26 +32,38 @@ class BagBrowser(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
 
-        filter_box = QGroupBox("Time Filters")
-        grid = QGridLayout(filter_box)
+        group = QGroupBox("Step 2 – Time & Bag selection")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(12)
+
+        top_row = QHBoxLayout()
         self.calendar = QCalendarWidget()
         self.calendar.selectionChanged.connect(self.emit_filter)
-        grid.addWidget(self.calendar, 0, 0, 3, 1)
+        self.calendar.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        top_row.addWidget(self.calendar, 1)
 
+        controls = QVBoxLayout()
+        controls.setSpacing(6)
+
+        start_row = QHBoxLayout()
+        start_row.addWidget(QLabel("Start:"))
         self.start_time = QTimeEdit()
         self.start_time.setDisplayFormat("HH:mm")
         self.start_time.setTimeRange(QTime(0, 0), QTime(23, 59))
         self.start_time.timeChanged.connect(self.emit_filter)
-        grid.addWidget(QLabel("Start"), 0, 1)
-        grid.addWidget(self.start_time, 0, 2)
+        start_row.addWidget(self.start_time)
+        controls.addLayout(start_row)
 
+        end_row = QHBoxLayout()
+        end_row.addWidget(QLabel("End:"))
         self.end_time = QTimeEdit()
         self.end_time.setDisplayFormat("HH:mm")
         self.end_time.setTimeRange(QTime(0, 0), QTime(23, 59))
         self.end_time.timeChanged.connect(self.emit_filter)
-        grid.addWidget(QLabel("End"), 1, 1)
-        grid.addWidget(self.end_time, 1, 2)
+        end_row.addWidget(self.end_time)
+        controls.addLayout(end_row)
 
         quick_row = QHBoxLayout()
         for label, delta in [
@@ -62,10 +74,14 @@ class BagBrowser(QWidget):
             btn = QPushButton(label)
             btn.clicked.connect(lambda _=False, d=delta: self.apply_quick_filter(d))
             quick_row.addWidget(btn)
-        quick_row.addStretch()
-        grid.addLayout(quick_row, 2, 1, 1, 2)
+        controls.addLayout(quick_row)
 
-        root.addWidget(filter_box)
+        self.match_label = QLabel("Showing 0 matching files")
+        controls.addWidget(self.match_label)
+        controls.addStretch()
+        top_row.addLayout(controls, 1)
+
+        layout.addLayout(top_row)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Name", "Timestamp", "Size (MB)"])
@@ -74,7 +90,11 @@ class BagBrowser(QWidget):
         self.table.itemSelectionChanged.connect(self._emit_selection)
         header = self.table.horizontalHeader()
         header.setStretchLastSection(True)
-        root.addWidget(self.table)
+        self.table.setMinimumHeight(320)
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.table, 1)
+
+        root.addWidget(group)
 
     def apply_quick_filter(self, delta: timedelta | None) -> None:
         if delta is None:
@@ -125,6 +145,7 @@ class BagBrowser(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(bag.dt.strftime("%Y-%m-%d %H:%M:%S")))
             self.table.setItem(row, 2, QTableWidgetItem(f"{bag.size / (1024*1024):.1f}"))
             self.table.item(row, 0).setData(Qt.UserRole, bag)
+        self.match_label.setText(f"Showing {len(filtered)} matching file(s)")
 
     def _emit_selection(self) -> None:
         self.selection_changed.emit(self.selected_bags())
