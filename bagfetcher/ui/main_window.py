@@ -7,16 +7,14 @@ import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Qt, Slot
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QGridLayout,
-    QGroupBox,
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
-    QSplitter,
+    QStackedWidget,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -25,52 +23,143 @@ from PySide6.QtWidgets import (
 from bagfetcher.core.models import BagFile
 from bagfetcher.core.robot_info import RobotInfo
 from bagfetcher.ui.bag_browser import BagBrowser
-from bagfetcher.ui.connect_panel import ConnectPanel
 from bagfetcher.ui.download_panel import DownloadPanel
+from bagfetcher.ui.pages import (
+    BagDownloadPage,
+    ConnectionPage,
+    DashboardPage,
+    ParameterRestorePage,
+)
 from bagfetcher.ui.workers import ConnectWorker, DownloadWorker, UserConfigWorker
 
 log = logging.getLogger(__name__)
+
+STYLESHEET = """
+QWidget {
+    background-color: #2e2e2e;
+    color: #e0e0e0;
+    font-size: 14px;
+}
+QMainWindow {
+    background-color: #2e2e2e;
+}
+QGroupBox {
+    font-weight: bold;
+    border: 1px solid #555;
+    border-radius: 8px;
+    margin-top: 10px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top center;
+    padding: 0 10px;
+}
+QLabel#header_title {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ffffff;
+}
+QPushButton {
+    background-color: #555;
+    color: #fff;
+    border: 1px solid #666;
+    padding: 8px 16px;
+    border-radius: 4px;
+}
+QPushButton:hover {
+    background-color: #666;
+}
+QPushButton:pressed {
+    background-color: #777;
+}
+QLineEdit, QPlainTextEdit, QSpinBox {
+    background-color: #3c3c3c;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 5px;
+}
+QStatusBar {
+    color: #ccc;
+}
+"""
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("BagFetcher")
-        self.resize(1200, 800)
+        icon_path = self._find_icon()
+        if icon_path:
+            self.setWindowIcon(QIcon(icon_path))
+
+        self.resize(1024, 768)
+        self.setStyleSheet(STYLESHEET)
+
         self._user_config_path: str | None = None
         self._robot_info: RobotInfo | None = None
         self._current_host: str | None = None
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
+        main_layout = QVBoxLayout(central)
 
-        splitter = QSplitter()
-        layout.addWidget(splitter)
+        # Header
+        header = self._build_header(icon_path)
+        main_layout.addLayout(header)
 
-        self.connect_panel = ConnectPanel()
-        splitter.addWidget(self.connect_panel)
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        self.robot_info_panel = self._build_robot_info_panel()
+        # Core widgets that are passed to pages
         self.bag_browser = BagBrowser()
         self.download_panel = DownloadPanel()
-        right_layout.addWidget(self.robot_info_panel)
-        right_layout.addWidget(self.bag_browser, 3)
-        right_layout.addWidget(self.download_panel, 2)
-        splitter.addWidget(right)
 
-        splitter.setSizes([400, 800])
+        # Pages
+        self.stacked_widget = QStackedWidget()
+        main_layout.addWidget(self.stacked_widget)
+
+        self._init_pages()
+        self._init_workers()
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
 
-        self.connect_panel.connect_requested.connect(self.handle_connect)
-        self.download_panel.download_requested.connect(self.handle_download)
-        self.download_panel.cancel_requested.connect(self.handle_cancel_download)
-        self.bag_browser.selection_changed.connect(self._selection_changed)
+        self._setup_connections()
 
+        self._config_shortcut = QShortcut(QKeySequence("1"), self)
+        self._config_shortcut.activated.connect(self._handle_user_config_download)
+
+    def _find_icon(self) -> str | None:
+        base_path = Path(__file__).resolve().parent.parent
+        icon_path = base_path / "packaging" / "cobotiq_logo.icns"
+        if icon_path.exists():
+            return str(icon_path)
+        return None
+
+    def _build_header(self, icon_path: str | None) -> QHBoxLayout:
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(10, 10, 10, 20)
+        if icon_path:
+            pixmap = QPixmap(icon_path)
+            icon_label = QLabel()
+            icon_label.setPixmap(pixmap.scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            header_layout.addWidget(icon_label)
+
+        title = QLabel("BagFetcher")
+        title.setObjectName("header_title")
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        return header_layout
+
+    def _init_pages(self) -> None:
+        self.connection_page = ConnectionPage()
+        self.dashboard_page = DashboardPage()
+        self.bag_download_page = BagDownloadPage(self.bag_browser, self.download_panel)
+        self.param_restore_page = ParameterRestorePage()
+
+        self.stacked_widget.addWidget(self.connection_page)
+        self.stacked_widget.addWidget(self.dashboard_page)
+        self.stacked_widget.addWidget(self.bag_download_page)
+        self.stacked_widget.addWidget(self.param_restore_page)
+
+    def _init_workers(self) -> None:
         self._ssh = None
         self._service = None
         self._connect_thread: QThread | None = None
@@ -80,69 +169,40 @@ class MainWindow(QMainWindow):
         self._user_config_thread: QThread | None = None
         self._user_config_worker: UserConfigWorker | None = None
 
-        self._config_shortcut = QShortcut(QKeySequence("1"), self)
-        self._config_shortcut.activated.connect(self._handle_user_config_download)
+    def _setup_connections(self) -> None:
+        # Connection
+        self.connection_page.connect_panel.connect_requested.connect(self.handle_connect)
 
-    def _build_robot_info_panel(self) -> QGroupBox:
-        box = QGroupBox("Robot Info")
-        grid = QGridLayout(box)
-        labels = [
-            ("SN / Product ID:", "robot_info_sn_label"),
-            ("Model type:", "robot_info_model_label"),
-            ("Model number:", "robot_info_model_number_label"),
-            ("Software (上位机版本):", "robot_info_sw_label"),
-        ]
+        # Dashboard navigation
+        self.dashboard_page.bag_download_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.bag_download_page))
+        self.dashboard_page.param_restore_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.param_restore_page))
 
-        for row, (text, attr) in enumerate(labels):
-            grid.addWidget(QLabel(text), row, 0)
-            value = QLabel("–")
-            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            setattr(self, attr, value)
-            grid.addWidget(value, row, 1, 1, 3)
+        # Back navigation
+        self.bag_download_page.back_requested.connect(self.show_dashboard)
+        self.param_restore_page.back_requested.connect(self.show_dashboard)
 
-        grid.addWidget(QLabel("User config:"), len(labels), 0)
-        self.user_config_path_label = QLabel("Not downloaded")
-        self.user_config_path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        grid.addWidget(self.user_config_path_label, len(labels), 1)
-        self.user_config_open_btn = QPushButton("Open")
-        self.user_config_open_btn.clicked.connect(self._open_user_config_default)
-        grid.addWidget(self.user_config_open_btn, len(labels), 2)
-        self.user_config_reveal_btn = QPushButton("Reveal in Finder")
-        self.user_config_reveal_btn.clicked.connect(self._reveal_user_config)
-        grid.addWidget(self.user_config_reveal_btn, len(labels), 3)
+        # Bag download
+        self.download_panel.download_requested.connect(self.handle_download)
+        self.download_panel.cancel_requested.connect(self.handle_cancel_download)
+        self.bag_browser.selection_changed.connect(self._selection_changed)
 
-        self.download_config_btn = QPushButton("Download user_config (1)")
-        self.download_config_btn.clicked.connect(self._handle_user_config_download)
-        grid.addWidget(self.download_config_btn, len(labels) + 1, 0, 1, 4)
+        # Param restore
+        self.param_restore_page.download_config_requested.connect(self._handle_user_config_download)
+        self.param_restore_page.user_config_open_btn.clicked.connect(self._open_user_config_default)
+        self.param_restore_page.user_config_reveal_btn.clicked.connect(self._reveal_user_config)
 
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 0)
-        grid.setColumnStretch(3, 0)
-        self._reset_robot_info_panel()
-        return box
-
-    def _reset_robot_info_panel(self) -> None:
-        self.robot_info_sn_label.setText("–")
-        self.robot_info_model_label.setText("–")
-        self.robot_info_model_number_label.setText("–")
-        self.robot_info_sw_label.setText("–")
-        self.user_config_path_label.setText("Not downloaded")
-        self.download_config_btn.setEnabled(False)
-        self.user_config_open_btn.setEnabled(False)
-        self.user_config_reveal_btn.setEnabled(False)
-        self._robot_info = None
-        self._user_config_path = None
+    def show_dashboard(self) -> None:
+        self.stacked_widget.setCurrentWidget(self.dashboard_page)
 
     # region slots -----------------------------------------------------
     def handle_connect(self, payload: dict) -> None:
         if self._connect_thread:
             QMessageBox.information(self, "BagFetcher", "Already connecting. Please wait.")
             return
-        self._reset_robot_info_panel()
         self._current_host = payload.get("host")
         self.status_bar.showMessage("Connecting…")
-        self.connect_panel.set_connection_status("Connecting…", state="progress")
-        self.connect_panel.setEnabled(False)
+        self.connection_page.connect_panel.set_connection_status("Connecting…", state="progress")
+        self.connection_page.connect_panel.setEnabled(False)
         worker = ConnectWorker(payload)
         thread = QThread(self)
         worker.moveToThread(thread)
@@ -207,15 +267,19 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         self._connect_thread = None
         self._connect_worker = None
-        self.connect_panel.setEnabled(True)
+        self.connection_page.connect_panel.setEnabled(True)
         self._ssh = ssh
         self._service = service
         host = worker.payload["host"]
         self._current_host = host
+        
         self.download_panel.set_suggestion(host)
         self.bag_browser.set_bags(bags)
-        self.status_bar.showMessage(f"Connected to {worker.payload['host']} – {len(bags)} files listed", 5000)
-        self.connect_panel.set_connection_status(f"Connected to {host}:{worker.payload['port']}", state="connected")
+        
+        self.status_bar.showMessage(f"Connected to {host} – {len(bags)} files listed", 5000)
+        self.connection_page.connect_panel.set_connection_status(f"Connected to {host}:{worker.payload['port']}", state="connected")
+        
+        self.stacked_widget.setCurrentWidget(self.dashboard_page)
         self._update_user_config_button_state()
 
     def _on_connect_error(self, message: str) -> None:
@@ -228,8 +292,8 @@ class MainWindow(QMainWindow):
             worker.deleteLater()
         self._connect_thread = None
         self._connect_worker = None
-        self.connect_panel.setEnabled(True)
-        self.connect_panel.set_connection_status("Connection failed", state="error")
+        self.connection_page.connect_panel.setEnabled(True)
+        self.connection_page.connect_panel.set_connection_status("Connection failed", state="error")
         QMessageBox.critical(self, "BagFetcher", f"Failed to connect: {message}")
         log.exception("Connect failed: %s", message)
 
@@ -278,12 +342,8 @@ class MainWindow(QMainWindow):
     # Robot info slots -------------------------------------------------
     @Slot(object)
     def _on_robot_info_loaded(self, robot_info: RobotInfo | None) -> None:
-        info = robot_info or RobotInfo()
-        self._robot_info = info
-        self.robot_info_sn_label.setText(info.product_id or info.sn or "Unknown")
-        self.robot_info_model_label.setText(info.model_type or "Unknown")
-        self.robot_info_model_number_label.setText(info.model_number or "Unknown")
-        self.robot_info_sw_label.setText(info.upper_pc_version or "Unknown")
+        self._robot_info = robot_info
+        self.dashboard_page.update_info(robot_info)
         self._update_user_config_button_state()
 
     def _open_in_finder(self, path: str) -> None:
@@ -294,7 +354,7 @@ class MainWindow(QMainWindow):
             return
         try:
             subprocess.Popen(["open", "-R", path])
-        except Exception as exc:  # pragma: no cover - macOS specific
+        except Exception as exc:
             QMessageBox.warning(self, "BagFetcher", f"Unable to reveal file in Finder: {exc}")
 
     def _open_user_config_default(self) -> None:
@@ -332,14 +392,14 @@ class MainWindow(QMainWindow):
         thread.start()
         self._user_config_thread = thread
         self._user_config_worker = worker
-        self.user_config_path_label.setText("Downloading…")
-        self.download_config_btn.setEnabled(False)
+        self.param_restore_page.set_path("Downloading…")
+        self.param_restore_page.set_buttons_enabled(False)
 
     @Slot(str)
     def _on_user_config_downloaded(self, path: str) -> None:
         self._cleanup_user_config_worker()
         self._user_config_path = path
-        self.user_config_path_label.setText(path)
+        self.param_restore_page.set_path(path)
         self.status_bar.showMessage("user_config.yaml downloaded", 5000)
         self._update_user_config_button_state()
 
@@ -347,7 +407,7 @@ class MainWindow(QMainWindow):
     def _on_user_config_download_error(self, message: str) -> None:
         self._cleanup_user_config_worker()
         self._user_config_path = None
-        self.user_config_path_label.setText("Download failed")
+        self.param_restore_page.set_path("Download failed")
         QMessageBox.warning(self, "BagFetcher", f"Failed to download user_config.yaml: {message}")
         self._update_user_config_button_state()
 
@@ -364,17 +424,15 @@ class MainWindow(QMainWindow):
 
     def _update_user_config_button_state(self) -> None:
         enabled = bool(self._ssh and self._robot_info and not self._user_config_thread)
-        self.download_config_btn.setEnabled(enabled)
+        self.param_restore_page.set_buttons_enabled(enabled)
         has_path = bool(self._user_config_path and os.path.exists(self._user_config_path))
-        self.user_config_open_btn.setEnabled(has_path)
-        self.user_config_reveal_btn.setEnabled(has_path)
+        self.param_restore_page.set_file_actions_enabled(has_path)
 
-    def closeEvent(self, event):  # type: ignore[override]
+    def closeEvent(self, event):
         try:
             self._cleanup_user_config_worker()
             if self._ssh:
                 self._ssh.close()
         finally:
             super().closeEvent(event)
-
     # endregion -------------------------------------------------------
