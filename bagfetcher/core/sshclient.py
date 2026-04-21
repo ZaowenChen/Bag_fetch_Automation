@@ -151,6 +151,32 @@ class SSHClientWrapper:
         exit_status = stdout.channel.recv_exit_status()
         return exit_status, output
 
+    def create_remote_archive(
+        self,
+        base_dir: str,
+        source_names: Iterable[str],
+        dest_tar: str,
+        timeout: int = 300,
+    ) -> None:
+        """Compress remote folders into a single tarball relative to base_dir."""
+        sources = [name for name in source_names if name]
+        if not sources:
+            raise ValueError("No source paths provided for archive creation")
+        safe_sources = " ".join(shlex.quote(name) for name in sources)
+        quoted_base = shlex.quote(base_dir)
+        quoted_dest = shlex.quote(dest_tar)
+        cmd = f"tar -C {quoted_base} -chzf {quoted_dest} {safe_sources} && chmod a+r {quoted_dest}"
+        code, output = self.run_sudo(cmd, timeout=timeout)
+        if code != 0:
+            raise RuntimeError(f"Failed to create remote archive: {output}")
+
+    def get_remote_file_size(self, path: str) -> int:
+        """Get the size of a remote file."""
+        try:
+            return self.sftp.stat(path).st_size
+        except IOError:
+            return 0
+
     def stage_files(self, remote_paths: Iterable[str], stage_dir: str, cancel_cb=None) -> None:
         for path in remote_paths:
             if cancel_cb and cancel_cb():

@@ -1,16 +1,21 @@
 """Page widgets for the BagFetcher application."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
-    QSplitter,
 )
 
 from bagfetcher.core.robot_info import RobotInfo
@@ -41,6 +46,7 @@ class DashboardPage(PageWidget):
 
     bag_download_requested = Signal()
     param_restore_requested = Signal()
+    software_backup_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -60,6 +66,10 @@ class DashboardPage(PageWidget):
         self.param_restore_btn = QPushButton("Parameter Restore")
         self.param_restore_btn.clicked.connect(self.param_restore_requested)
         functions_layout.addWidget(self.param_restore_btn, 0, 1)
+
+        self.backup_btn = QPushButton("Machine Software Backup")
+        self.backup_btn.clicked.connect(self.software_backup_requested)
+        functions_layout.addWidget(self.backup_btn, 1, 0, 1, 2)
 
         layout.addLayout(functions_layout)
         layout.addStretch()
@@ -168,3 +178,95 @@ class ParameterRestorePage(PageWidget):
     def set_file_actions_enabled(self, enabled: bool) -> None:
         self.user_config_open_btn.setEnabled(enabled)
         self.user_config_reveal_btn.setEnabled(enabled)
+
+
+class SoftwareBackupPage(PageWidget):
+    """Page for backing up key software folders."""
+
+    backup_start_requested = Signal(list, Path)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.checkboxes: dict[str, QCheckBox] = {}
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+
+        back_btn = QPushButton("Back to Dashboard")
+        back_btn.clicked.connect(self.back_requested)
+        nav_layout = QHBoxLayout()
+        nav_layout.addWidget(back_btn)
+        nav_layout.addStretch()
+        layout.addLayout(nav_layout)
+
+        box = QGroupBox("Select Folders to Backup")
+        vbox = QVBoxLayout(box)
+
+        folders = [
+            "work_space",
+            "conveyor",
+            "public",
+            "launch",
+            "modules",
+            "persist",
+            "app_tool",
+        ]
+
+        for name in folders:
+            checkbox = QCheckBox(name)
+            if name in {"work_space", "conveyor", "public"}:
+                checkbox.setChecked(True)
+            self.checkboxes[name] = checkbox
+            vbox.addWidget(checkbox)
+
+        layout.addWidget(box)
+
+        self.download_btn = QPushButton("Download as .tar.gz")
+        self.download_btn.clicked.connect(self._handle_download)
+        self.download_btn.setMinimumHeight(40)
+        layout.addWidget(self.download_btn)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
+
+        self.status_label = QLabel("")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+
+        layout.addStretch()
+
+    def _handle_download(self) -> None:
+        selected = [name for name, cb in self.checkboxes.items() if cb.isChecked()]
+        if not selected:
+            self.update_status("Select at least one folder to back up.")
+            return
+
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Download Directory",
+            str(Path.home()),
+        )
+        if not directory:
+            return
+
+        self.backup_start_requested.emit(selected, Path(directory))
+
+    def update_status(self, message: str) -> None:
+        self.status_label.setText(message)
+
+    def update_progress(self, value: int, total: int) -> None:
+        if total > 0:
+            percent = int((value / total) * 100)
+            self.progress_bar.setValue(percent)
+        else:
+            self.progress_bar.setValue(0)
+
+    def set_busy(self, busy: bool) -> None:
+        self.download_btn.setEnabled(not busy)
+        for checkbox in self.checkboxes.values():
+            checkbox.setEnabled(not busy)
+        if busy:
+            self.progress_bar.setValue(0)

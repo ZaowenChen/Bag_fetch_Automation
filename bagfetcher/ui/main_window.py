@@ -29,8 +29,9 @@ from bagfetcher.ui.pages import (
     ConnectionPage,
     DashboardPage,
     ParameterRestorePage,
+    SoftwareBackupPage,
 )
-from bagfetcher.ui.workers import ConnectWorker, DownloadWorker, UserConfigWorker
+from bagfetcher.ui.workers import BackupWorker, ConnectWorker, DownloadWorker, UserConfigWorker
 
 log = logging.getLogger(__name__)
 
@@ -153,11 +154,13 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage()
         self.bag_download_page = BagDownloadPage(self.bag_browser, self.download_panel)
         self.param_restore_page = ParameterRestorePage()
+        self.backup_page = SoftwareBackupPage()
 
         self.stacked_widget.addWidget(self.connection_page)
         self.stacked_widget.addWidget(self.dashboard_page)
         self.stacked_widget.addWidget(self.bag_download_page)
         self.stacked_widget.addWidget(self.param_restore_page)
+        self.stacked_widget.addWidget(self.backup_page)
 
     def _init_workers(self) -> None:
         self._ssh = None
@@ -168,6 +171,8 @@ class MainWindow(QMainWindow):
         self._download_worker: DownloadWorker | None = None
         self._user_config_thread: QThread | None = None
         self._user_config_worker: UserConfigWorker | None = None
+        self._backup_thread: QThread | None = None
+        self._backup_worker: BackupWorker | None = None
 
     def _setup_connections(self) -> None:
         # Connection
@@ -176,10 +181,12 @@ class MainWindow(QMainWindow):
         # Dashboard navigation
         self.dashboard_page.bag_download_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.bag_download_page))
         self.dashboard_page.param_restore_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.param_restore_page))
+        self.dashboard_page.software_backup_requested.connect(lambda: self.stacked_widget.setCurrentWidget(self.backup_page))
 
         # Back navigation
         self.bag_download_page.back_requested.connect(self.show_dashboard)
         self.param_restore_page.back_requested.connect(self.show_dashboard)
+        self.backup_page.back_requested.connect(self.show_dashboard)
 
         # Bag download
         self.download_panel.download_requested.connect(self.handle_download)
@@ -190,6 +197,9 @@ class MainWindow(QMainWindow):
         self.param_restore_page.download_config_requested.connect(self._handle_user_config_download)
         self.param_restore_page.user_config_open_btn.clicked.connect(self._open_user_config_default)
         self.param_restore_page.user_config_reveal_btn.clicked.connect(self._reveal_user_config)
+
+        # Software backup
+        self.backup_page.backup_start_requested.connect(self._handle_backup)
 
     def show_dashboard(self) -> None:
         self.stacked_widget.setCurrentWidget(self.dashboard_page)
@@ -246,6 +256,29 @@ class MainWindow(QMainWindow):
         thread.start()
         self._download_thread = thread
         self._download_worker = worker
+
+    def _handle_backup(self, folders: list[str], local_dir: Path) -> None:
+        if not self._ssh:
+            QMessageBox.warning(self, "BagFetcher", "Connect to a host before starting a backup.")
+            return
+        if self._backup_thread:
+            QMessageBox.information(self, "BagFetcher", "A software backup is already in progress.")
+            return
+        stage_dir = self._service.stage_dir if self._service else "/root/public/tmp"
+        self.backup_page.set_busy(True)
+        self.backup_page.update_status("Starting backup…")
+        self.status_bar.showMessage("Starting software backup…")
+
+        worker = BackupWorker(self._ssh, folders, local_dir, stage_dir)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_backup_progress)
+        worker.finished.connect(self._on_backup_finished)
+        worker.error.connect(self._on_backup_error)
+        thread.start()
+        self._backup_thread = thread
+        self._backup_worker = worker
 
     def _selection_changed(self, bags: list[BagFile]) -> None:
         self.status_bar.showMessage(f"{len(bags)} files selected")
@@ -339,6 +372,44 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "BagFetcher", f"Download failed: {message}")
         log.exception("Download failed: %s", message)
 
+    def _on_backup_progress(self, message: str, transferred: int, total: int) -> None:
+        self.backup_page.update_status(message)
+        self.backup_page.update_progress(transferred, total)
+        if total > 0:
+            percent = int((transferred / total) * 100)
+            status = f"{message} ({percent}%)"
+        else:
+            status = message
+        self.status_bar.showMessage(status)
+
+    def _on_backup_finished(self, local_path: str) -> None:
+        self._cleanup_backup_worker()
+        self.backup_page.set_busy(False)
+        self.backup_page.update_status(f"Backup saved to {local_path}")
+        self.backup_page.update_progress(100, 100)
+        self.status_bar.showMessage("Software backup complete", 5000)
+        QMessageBox.information(self, "Success", "Software backup downloaded.")
+
+    def _on_backup_error(self, message: str) -> None:
+        self._cleanup_backup_worker()
+        self.backup_page.set_busy(False)
+        self.backup_page.update_status(f"Error: {message}")
+        self.backup_page.update_progress(0, 100)
+        self.status_bar.showMessage("Software backup failed", 5000)
+        QMessageBox.critical(self, "Backup Failed", message)
+        log.exception("Backup failed: %s", message)
+
+    def _cleanup_backup_worker(self) -> None:
+        thread = self._backup_thread
+        worker = self._backup_worker
+        if thread:
+            thread.quit()
+            thread.wait()
+        if worker:
+            worker.deleteLater()
+        self._backup_thread = None
+        self._backup_worker = None
+
     # Robot info slots -------------------------------------------------
     @Slot(object)
     def _on_robot_info_loaded(self, robot_info: RobotInfo | None) -> None:
@@ -430,6 +501,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         try:
+            self._cleanup_backup_worker()
             self._cleanup_user_config_worker()
             if self._ssh:
                 self._ssh.close()

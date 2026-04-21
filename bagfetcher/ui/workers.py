@@ -131,3 +131,58 @@ class UserConfigWorker(QObject):
             self.error.emit(str(exc))
             return
         self.finished.emit(local_path)
+
+
+class BackupWorker(QObject):
+    progress = Signal(str, int, int)  # status, transferred, total
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        ssh: SSHClientWrapper,
+        folders: Iterable[str],
+        local_dir: Path,
+        stage_dir: str,
+    ) -> None:
+        super().__init__()
+        self.ssh = ssh
+        self.folders = [folder for folder in folders if folder]
+        self.local_dir = local_dir
+        self.stage_dir = stage_dir
+
+    @Slot()
+    def run(self) -> None:
+        if not self.folders:
+            self.error.emit("No folders selected for backup.")
+            return
+        tar_name = "software_backup.tar.gz"
+        remote_tar = f"{self.stage_dir.rstrip('/')}/{tar_name}"
+        local_dest = self.local_dir / tar_name
+        success = False
+        try:
+            self.local_dir.mkdir(parents=True, exist_ok=True)
+            self.progress.emit("Preparing stage directory...", 0, 0)
+            self.ssh.ensure_stage(self.stage_dir)
+            self.progress.emit(f"Compressing {len(self.folders)} folders on remote...", 0, 0)
+            self.ssh.create_remote_archive("/root", self.folders, remote_tar)
+            size = self.ssh.get_remote_file_size(remote_tar)
+            self.progress.emit("Downloading archive...", 0, size)
+            self.ssh.download_file(
+                self.stage_dir,
+                tar_name,
+                local_dest,
+                progress_cb=lambda transferred: self.progress.emit("Downloading archive...", transferred, size),
+            )
+            success = True
+        except Exception as exc:  # pragma: no cover - network side effects
+            self.error.emit(str(exc))
+            return
+        finally:
+            try:
+                if success:
+                    self.progress.emit("Cleaning up...", 0, 0)
+                self.ssh.cleanup(self.stage_dir, [tar_name])
+            except Exception:
+                pass
+        self.finished.emit(str(local_dest))

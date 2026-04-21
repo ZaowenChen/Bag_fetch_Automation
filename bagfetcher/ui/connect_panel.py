@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -42,22 +43,59 @@ class ConnectPanel(QWidget):
         step_layout = QVBoxLayout(step_group)
         step_layout.setSpacing(12)
 
+        # 1. Connection Mode Tabs
+        self.tab_widget = QTabWidget()
+        step_layout.addWidget(self.tab_widget)
+
+        # -- Tab 1: Remote (Ngrok) --
+        remote_tab = QWidget()
+        remote_layout = QVBoxLayout(remote_tab)
+        remote_layout.setContentsMargins(10, 10, 10, 10)
+
         instruction = QLabel("Paste ngrok SSH block here (from WeChat)")
         instruction.setWordWrap(True)
-        step_layout.addWidget(instruction)
+        remote_layout.addWidget(instruction)
 
         self.paste = QPlainTextEdit()
         self.paste.setPlaceholderText("ssh gaussian@ngrok-xxxx.gs-robot.com -p 12345\npassword123")
-        self.paste.setMinimumHeight(140)
-        step_layout.addWidget(self.paste)
+        self.paste.setMinimumHeight(100)
+        remote_layout.addWidget(self.paste)
 
         parse_row = QHBoxLayout()
         parse_row.addStretch()
         self.parse_btn = QPushButton("Parse")
         self.parse_btn.clicked.connect(self.parse_block)
         parse_row.addWidget(self.parse_btn)
-        step_layout.addLayout(parse_row)
+        remote_layout.addLayout(parse_row)
 
+        self.tab_widget.addTab(remote_tab, "Ngrok / Remote")
+
+        # -- Tab 2: Local (LAN) --
+        local_tab = QWidget()
+        local_layout = QVBoxLayout(local_tab)
+        local_layout.setContentsMargins(10, 10, 10, 10)
+
+        local_info = QLabel(
+            "<b>Local Connection</b><br><br>"
+            "Connects to the robot via standard LAN IP.<br>"
+            "Ensure the computer is connected to the robot's network."
+        )
+        local_info.setWordWrap(True)
+        local_info.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        local_layout.addWidget(local_info)
+
+        local_creds = QLabel(
+            "<ul>"
+            "<li><b>Host:</b> 10.7.5.88</li>"
+            "<li><b>User:</b> cobotiq</li>"
+            "</ul>"
+        )
+        local_layout.addWidget(local_creds)
+        local_layout.addStretch()
+
+        self.tab_widget.addTab(local_tab, "Local (LAN)")
+
+        # 2. Shared Connection Details Form
         form_box = QGroupBox("Connection Details")
         form_layout = QFormLayout(form_box)
         form_layout.setLabelAlignment(Qt.AlignRight)
@@ -125,7 +163,25 @@ class ConnectPanel(QWidget):
         step_layout.addStretch()
         root.addWidget(step_group)
 
+        # Connect tab signal AFTER all UI elements are created
+        self.tab_widget.currentChanged.connect(self._on_mode_changed)
+
     # endregion -------------------------------------------------------
+
+    def _on_mode_changed(self, index: int) -> None:
+        """Handle switching between Ngrok (0) and Local (1) tabs."""
+        if index == 1:  # Local
+            self.user_edit.setText("cobotiq")
+            self.host_edit.setText("10.7.5.88")
+            self.port_spin.setValue(22)
+            self.password_edit.setText("cobotiq")
+        else:  # Remote
+            # When switching back to remote, clear the specific local fields
+            # to avoid confusion, setting them back to defaults awaiting parse.
+            self.user_edit.setText("gaussian")
+            self.host_edit.clear()
+            self.port_spin.setValue(22)
+            self.password_edit.clear()
 
     def parse_block(self) -> None:
         try:
@@ -179,12 +235,20 @@ class ConnectPanel(QWidget):
         self.connect_requested.emit(payload)
 
     def parse_paste_result(self, result: PasteResult) -> None:
+        # Switch to remote tab if external parse happens
+        self.tab_widget.setCurrentIndex(0)
         self.user_edit.setText(result.user)
         self.host_edit.setText(result.host)
         self.port_spin.setValue(result.port)
         self.password_edit.setText(result.password)
 
     def load_profile(self, profile: Profile) -> None:
+        # Determine if this looks like a local profile
+        if profile.host == "10.7.5.88" and profile.user == "cobotiq":
+            self.tab_widget.setCurrentIndex(1)
+        else:
+            self.tab_widget.setCurrentIndex(0)
+
         self.user_edit.setText(profile.user)
         self.host_edit.setText(profile.host)
         self.port_spin.setValue(profile.port)
